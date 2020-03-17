@@ -31,10 +31,17 @@ Metadata:
           - KeyName
           - BootstrapArguments
       - Label:
+          default: Spot Configuration
+        Parameters:
+          - MaxPrice
+          - OnDemandBaseCapacity
+          - OnDemandPercentageAboveBaseCapacity
+      - Label:
           default: Worker Network Configuration
         Parameters:
           - VpcId
           - Subnets
+          - AssociatePublicIpAddress
 
 Parameters:
   BootstrapArguments:
@@ -54,10 +61,15 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
     Description: The EC2 Key Pair to allow SSH access to the instances
 
+  MaxPrice:
+    Type: String
+    Default: ""
+    Description: MaxPrice for Spot instance, if empty on-demand price is used
+  
   AssociatePublicIpAddress:
     Type: String
-    AllowedValues: [true, false]
-    Default: true
+    AllowedValues: ["true", "false"]
+    Default: "true"
     Description: Associate a Public IP Address for Internet Gateway subnets.
 
   NodeAutoScalingGroupDesiredCapacity:
@@ -86,7 +98,7 @@ Parameters:
 
   NodeImageIdSSMParam:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default:  /aws/service/eks/optimized-ami/1.14/amazon-linux-2-arm64/recommended/image_id
+    Default: /aws/service/eks/optimized-ami/1.14/amazon-linux-2-arm64/recommended/image_id
     Description: AWS Systems Manager Parameter Store parameter of the AMI ID for the worker node instances.
 
   NodeInstanceType:
@@ -109,6 +121,16 @@ Parameters:
     ConstraintDescription: Must be a valid EC2 instance type
     Description: EC2 instance type for the node instances
 
+  OnDemandBaseCapacity:
+    Type: Number
+    Default: 1
+    Description: Number of instances that should be OnDemand
+
+  OnDemandPercentageAboveBaseCapacity:
+    Type: Number
+    Default: 0
+    Description: Number of instances above the base capacity to scale together with SPOT 
+
   NodeVolumeSize:
     Type: Number
     Default: 20
@@ -127,6 +149,15 @@ Conditions:
     - Fn::Equals:
         - Ref: NodeImageId
         - ""
+  HasAssociatePublicIpAddress: !Not
+    - Fn::Equals:
+      - Ref: AssociatePublicIpAddress
+      - "false"
+
+  SetMaxPrice: !Not
+    - Fn::Equals:
+      - Ref: MaxPrice
+      - ""
 
 Resources:
   NodeInstanceRole:
@@ -236,28 +267,27 @@ Resources:
         BlockDeviceMappings:
           - DeviceName: /dev/xvda
             Ebs:
-              DeleteOnTermination: true
-              VolumeSize: !Ref NodeVolumeSize
-              VolumeType: gp2
+                DeleteOnTermination: true
+                VolumeSize: !Ref NodeVolumeSize
+                VolumeType: gp2
         IamInstanceProfile:
           Name: !Ref NodeInstanceProfile
         ImageId: !If
           - HasNodeImageId
           - Ref: NodeImageId
           - Ref: NodeImageIdSSMParam
-        InstanceMarketOptions:
-          MarketType: spot
-          SpotOptions:
-            MaxPrice: 1
-            SpotInstanceType: String
-            ValidUntil: String
         InstanceType: !Ref NodeInstanceType
         KeyName: !Ref KeyName
         NetworkInterfaces:
-          - AssociatePublicIpAddress: !Ref AssociatePublicIpAddress
-        SecurityGroupIds:
-          - !GetAtt NodeSecurityGroup.GroupId
-        UserData: !Base64
+          - AssociatePublicIpAddress: !If
+              - HasAssociatePublicIpAddress
+              - true
+              - false
+            DeviceIndex: 0
+            DeleteOnTermination: true
+            Groups:
+              - !Ref NodeSecurityGroup
+        UserData: !Base64 
           Fn::Sub: |
             #!/bin/bash
             set -o xtrace
@@ -271,7 +301,20 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       DesiredCapacity: !Ref NodeAutoScalingGroupDesiredCapacity
-      LaunchConfigurationName: !Ref NodeLaunchTemplate
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandAllocationStrategy: "prioritized"
+          OnDemandBaseCapacity: !Ref OnDemandBaseCapacity
+          OnDemandPercentageAboveBaseCapacity: !Ref OnDemandPercentageAboveBaseCapacity
+          SpotAllocationStrategy: "capacity-optimized"
+          SpotMaxPrice: !If
+          - SetMaxPrice
+          - Ref: MaxPrice
+          - Ref: AWS::NoValue
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref NodeLaunchTemplate
+            Version: !GetAtt NodeLaunchTemplate.LatestVersionNumber
       MaxSize: !Ref NodeAutoScalingGroupMaxSize
       MinSize: !Ref NodeAutoScalingGroupMinSize
       Tags:
@@ -285,7 +328,7 @@ Resources:
     UpdatePolicy:
       AutoScalingRollingUpdate:
         MaxBatchSize: 1
-        MinInstancesInService: !Ref NodeAutoScalingGroupDesiredCapacity
+        MinInstancesInService: 0
         PauseTime: PT5M
 
 Outputs:

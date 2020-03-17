@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: "2010-09-09"
+AWSTemplateFormatVersion: 2010-09-09
 
 Description: Amazon EKS - Bottlerocket Custom Node Group
 
@@ -10,7 +10,7 @@ Mappings:
       ec2: ec2.amazonaws.com
 
 Metadata:
-  "AWS::CloudFormation::Interface":
+  AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
           default: EKS Cluster
@@ -31,25 +31,33 @@ Metadata:
           - KeyName
           - BootstrapArguments
       - Label:
+          default: Spot Configuration
+        Parameters:
+          - MaxPrice
+          - OnDemandBaseCapacity
+          - OnDemandPercentageAboveBaseCapacity
+      - Label:
           default: Worker Network Configuration
         Parameters:
           - VpcId
           - Subnets
+          - AssociatePublicIpAddress
 
 Parameters:
-  APIServerFQND:
+  Endpoint:
     Type: String
-    Default: ""
-  EKSCertificateCA:
+    Description: The endpoint for your Kubernetes API server, such as https://5E1D0CEXAMPLEA591B746AFC5AB30262.yl4.us-west-2.eks.amazonaws.com.
+  CertificateAuthorityData:
     Type: String
-    Default: ""      
+    Description: The certificate-authority-data for your cluster.
+      
   BootstrapArguments:
     Type: String
     Default: ""
-    Description: "Arguments to pass to the bootstrap script. See files/bootstrap.sh in https://github.com/awslabs/amazon-eks-ami"
+    Description: Arguments to pass to the bootstrap script. See files/bootstrap.sh in https://github.com/awslabs/amazon-eks-ami
 
   ClusterControlPlaneSecurityGroup:
-    Type: "AWS::EC2::SecurityGroup::Id"
+    Type: AWS::EC2::SecurityGroup::Id
     Description: The security group of the cluster control plane.
 
   ClusterName:
@@ -57,8 +65,19 @@ Parameters:
     Description: The cluster name provided when the cluster was created. If it is incorrect, nodes will not be able to join the cluster.
 
   KeyName:
-    Type: "AWS::EC2::KeyPair::KeyName"
+    Type: AWS::EC2::KeyPair::KeyName
     Description: The EC2 Key Pair to allow SSH access to the instances
+
+  MaxPrice:
+    Type: String
+    Default: ""
+    Description: MaxPrice for Spot instance, if empty on-demand price is used
+  
+  AssociatePublicIpAddress:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Associate a Public IP Address for Internet Gateway subnets.
 
   NodeAutoScalingGroupDesiredCapacity:
     Type: Number
@@ -85,8 +104,8 @@ Parameters:
     Description: (Optional) Specify your own custom image ID. This value overrides any AWS Systems Manager Parameter Store value specified above.
 
   NodeImageIdSSMParam:
-    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
-    Default: /aws/service/eks/optimized-ami/1.14/amazon-linux-2/recommended/image_id
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/eks/optimized-ami/1.15/amazon-linux-2/recommended/image_id
     Description: AWS Systems Manager Parameter Store parameter of the AMI ID for the worker node instances.
 
   NodeInstanceType:
@@ -350,28 +369,47 @@ Parameters:
     ConstraintDescription: Must be a valid EC2 instance type
     Description: EC2 instance type for the node instances
 
+  OnDemandBaseCapacity:
+    Type: Number
+    Default: 1
+    Description: Number of instances that should be OnDemand
+
+  OnDemandPercentageAboveBaseCapacity:
+    Type: Number
+    Default: 0
+    Description: Number of instances above the base capacity to scale together with SPOT 
+
   NodeVolumeSize:
     Type: Number
     Default: 20
     Description: Node volume size
 
   Subnets:
-    Type: "List<AWS::EC2::Subnet::Id>"
+    Type: List<AWS::EC2::Subnet::Id>
     Description: The subnets where workers can be created.
 
   VpcId:
-    Type: "AWS::EC2::VPC::Id"
+    Type: AWS::EC2::VPC::Id
     Description: The VPC of the worker instances
 
 Conditions:
   HasNodeImageId: !Not
-    - "Fn::Equals":
+    - Fn::Equals:
         - Ref: NodeImageId
         - ""
+  HasAssociatePublicIpAddress: !Not
+    - Fn::Equals:
+      - Ref: AssociatePublicIpAddress
+      - "false"
+
+  SetMaxPrice: !Not
+    - Fn::Equals:
+      - Ref: MaxPrice
+      - ""
 
 Resources:
   NodeInstanceRole:
-    Type: "AWS::IAM::Role"
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -381,7 +419,7 @@ Resources:
               Service:
                 - !FindInMap [ServicePrincipals, !Ref "AWS::Partition", ec2]
             Action:
-              - "sts:AssumeRole"
+              - sts:AssumeRole
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy"
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
@@ -390,14 +428,14 @@ Resources:
       Path: /
 
   NodeInstanceProfile:
-    Type: "AWS::IAM::InstanceProfile"
+    Type: AWS::IAM::InstanceProfile
     Properties:
       Path: /
       Roles:
         - Ref: NodeInstanceRole
 
   NodeSecurityGroup:
-    Type: "AWS::EC2::SecurityGroup"
+    Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for all nodes in the cluster
       Tags:
@@ -406,7 +444,7 @@ Resources:
       VpcId: !Ref VpcId
 
   NodeSecurityGroupIngress:
-    Type: "AWS::EC2::SecurityGroupIngress"
+    Type: AWS::EC2::SecurityGroupIngress
     DependsOn: NodeSecurityGroup
     Properties:
       Description: Allow node to communicate with each other
@@ -417,7 +455,7 @@ Resources:
       ToPort: 65535
 
   ClusterControlPlaneSecurityGroupIngress:
-    Type: "AWS::EC2::SecurityGroupIngress"
+    Type: AWS::EC2::SecurityGroupIngress
     DependsOn: NodeSecurityGroup
     Properties:
       Description: Allow pods to communicate with the cluster API Server
@@ -428,7 +466,7 @@ Resources:
       ToPort: 443
 
   ControlPlaneEgressToNodeSecurityGroup:
-    Type: "AWS::EC2::SecurityGroupEgress"
+    Type: AWS::EC2::SecurityGroupEgress
     DependsOn: NodeSecurityGroup
     Properties:
       Description: Allow the cluster control plane to communicate with worker Kubelet and pods
@@ -439,7 +477,7 @@ Resources:
       ToPort: 65535
 
   ControlPlaneEgressToNodeSecurityGroupOn443:
-    Type: "AWS::EC2::SecurityGroupEgress"
+    Type: AWS::EC2::SecurityGroupEgress
     DependsOn: NodeSecurityGroup
     Properties:
       Description: Allow the cluster control plane to communicate with pods running extension API servers on port 443
@@ -450,7 +488,7 @@ Resources:
       ToPort: 443
 
   NodeSecurityGroupFromControlPlaneIngress:
-    Type: "AWS::EC2::SecurityGroupIngress"
+    Type: AWS::EC2::SecurityGroupIngress
     DependsOn: NodeSecurityGroup
     Properties:
       Description: Allow worker Kubelets and pods to receive communication from the cluster control plane
@@ -461,7 +499,7 @@ Resources:
       ToPort: 65535
 
   NodeSecurityGroupFromControlPlaneOn443Ingress:
-    Type: "AWS::EC2::SecurityGroupIngress"
+    Type: AWS::EC2::SecurityGroupIngress
     DependsOn: NodeSecurityGroup
     Properties:
       Description: Allow pods running extension API servers on port 443 to receive communication from cluster control plane
@@ -471,60 +509,87 @@ Resources:
       SourceSecurityGroupId: !Ref ClusterControlPlaneSecurityGroup
       ToPort: 443
 
-  NodeLaunchConfig:
-    Type: "AWS::AutoScaling::LaunchConfiguration"
+  NodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
-      AssociatePublicIpAddress: "true"
-      BlockDeviceMappings:
-        - DeviceName: /dev/xvda
-          Ebs:
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+                DeleteOnTermination: true
+                VolumeSize: !Ref NodeVolumeSize
+                VolumeType: gp2
+        IamInstanceProfile:
+          Name: !Ref NodeInstanceProfile
+        ImageId: !If
+          - HasNodeImageId
+          - Ref: NodeImageId
+          - Ref: NodeImageIdSSMParam
+        InstanceType: !Ref NodeInstanceType
+        KeyName: !Ref KeyName
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: !If
+              - HasAssociatePublicIpAddress
+              - true
+              - false
+            DeviceIndex: 0
             DeleteOnTermination: true
-            VolumeSize: !Ref NodeVolumeSize
-            VolumeType: gp2
-      IamInstanceProfile: !Ref NodeInstanceProfile
-      ImageId: !If
-        - HasNodeImageId
-        - Ref: NodeImageId
-        - Ref: NodeImageIdSSMParam
-      InstanceType: !Ref NodeInstanceType
-      KeyName: !Ref KeyName
-      SecurityGroups:
-        - Ref: NodeSecurityGroup
-      UserData: !Base64
-        "Fn::Sub": |
-          [settings.aws]
-          region = "${AWS::Region}"
+            Groups:
+              - !Ref NodeSecurityGroup
+        UserData: !Base64 
+          Fn::Sub: |
+            [settings.aws]
+            region = "${AWS::Region}"
 
-          [settings.host-containers.control]
-          enabled = true
-          source = "898273216194.dkr.ecr.eu-west-1.amazonaws.com/bottlerocket-control-container:v0.4.0-baf20456"
+            [settings.host-containers.control]
+            enabled = true
+            source = "898273216194.dkr.ecr.eu-west-1.amazonaws.com/bottlerocket-control-container:v0.4.0-baf20456"
 
-          [settings.host-containers.admin]
-          enabled = true
-          source = "898273216194.dkr.ecr.eu-west-1.amazonaws.com/bottlerocket-admin-container:v0.4.0-f969cba3"
+            [settings.host-containers.admin]
+            enabled = true
+            source = "898273216194.dkr.ecr.eu-west-1.amazonaws.com/bottlerocket-admin-container:v0.4.0-f969cba3"
 
-          [settings.kubernetes.node-labels]
-          "kubernetes.io/flavor" = "bottlerocket"
+            [settings.kubernetes.node-labels]
+            "kubernetes.io/flavor" = "bottlerocket"
 
-          [settings.kubernetes]
-          api-server = "${APIServerFQND}"
-          cluster-certificate ="${EKSCertificateCA}"
-          cluster-name = "${ClusterName}"
+            [settings.kubernetes]
+            api-server = "${Endpoint}"
+            cluster-certificate ="${CertificateAuthorityData}"
+            cluster-name = "${ClusterName}"
+
   NodeGroup:
-    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       DesiredCapacity: !Ref NodeAutoScalingGroupDesiredCapacity
-      LaunchConfigurationName: !Ref NodeLaunchConfig
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandAllocationStrategy: "prioritized"
+          OnDemandBaseCapacity: !Ref OnDemandBaseCapacity
+          OnDemandPercentageAboveBaseCapacity: !Ref OnDemandPercentageAboveBaseCapacity
+          SpotAllocationStrategy: "capacity-optimized"
+          SpotMaxPrice: !If
+          - SetMaxPrice
+          - Ref: MaxPrice
+          - Ref: AWS::NoValue
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref NodeLaunchTemplate
+            Version: !GetAtt NodeLaunchTemplate.LatestVersionNumber
       MaxSize: !Ref NodeAutoScalingGroupMaxSize
       MinSize: !Ref NodeAutoScalingGroupMinSize
       Tags:
         - Key: Name
-          PropagateAtLaunch: "true"
+          PropagateAtLaunch: true
           Value: !Sub ${ClusterName}-${NodeGroupName}-Node
         - Key: !Sub kubernetes.io/cluster/${ClusterName}
-          PropagateAtLaunch: "true"
+          PropagateAtLaunch: true
           Value: owned
       VPCZoneIdentifier: !Ref Subnets
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: 1
+        MinInstancesInService: 0
+        PauseTime: PT5M
 
 Outputs:
   NodeInstanceRole:
