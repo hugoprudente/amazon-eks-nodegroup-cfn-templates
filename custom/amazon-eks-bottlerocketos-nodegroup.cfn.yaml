@@ -541,14 +541,6 @@ Resources:
             [settings.aws]
             region = "${AWS::Region}"
 
-            [settings.host-containers.control]
-            enabled = true
-            source = "898273216194.dkr.ecr.eu-west-1.amazonaws.com/bottlerocket-control-container:v0.4.0-baf20456"
-
-            [settings.host-containers.admin]
-            enabled = true
-            source = "898273216194.dkr.ecr.eu-west-1.amazonaws.com/bottlerocket-admin-container:v0.4.0-f969cba3"
-
             [settings.kubernetes.node-labels]
             "kubernetes.io/flavor" = "bottlerocket"
 
