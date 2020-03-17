@@ -33,7 +33,7 @@ Metadata:
 Parameters:
   BootstrapArguments:
     Type: String
-    Default: ""
+    Default: --register-with-taints="os=Win1909:NoSchedule"
     Description: "Arguments to pass to the bootstrap script."
 
   ClusterControlPlaneSecurityGroup:
