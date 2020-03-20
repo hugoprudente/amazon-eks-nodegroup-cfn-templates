@@ -2,8 +2,15 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 Description: Amazon EKS - Windows Custom Node Group.
 
+Mappings:
+  ServicePrincipals:
+    aws-cn:
+      ec2: ec2.amazonaws.com.cn
+    aws:
+      ec2: ec2.amazonaws.com
+
 Metadata:
-  "AWS::CloudFormation::Interface":
+  AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
           default: EKS Cluster
@@ -24,24 +31,31 @@ Metadata:
           - KeyName
           - BootstrapArguments
       - Label:
+          default: Spot Configuration
+        Parameters:
+          - MaxPrice
+          - OnDemandBaseCapacity
+          - OnDemandPercentageAboveBaseCapacity
+      - Label:
           default: Worker Network Configuration
         Parameters:
           - VpcId
-          - NodeSecurityGroups
           - Subnets
+          - AssociatePublicIpAddress
+          - NodeSecurityGroups
 
 Parameters:
   BootstrapArguments:
     Type: String
     Default: --register-with-taints="os=Win1909:NoSchedule"
-    Description: "Arguments to pass to the bootstrap script."
+    Description: Arguments to pass to the bootstrap script. See files/bootstrap.sh in https://github.com/awslabs/amazon-eks-ami
 
   ClusterControlPlaneSecurityGroup:
-    Type: "AWS::EC2::SecurityGroup::Id"
+    Type: AWS::EC2::SecurityGroup::Id
     Description: The security group of the cluster control plane.
 
   NodeSecurityGroups:
-    Type: "List<AWS::EC2::SecurityGroup::Id>"
+    Type: List<AWS::EC2::SecurityGroup::Id>
     Description: The security group (or groups) assigned to the Linux worker nodes. For clusters created with eksctl, specify both the Linux node security group and the cluster shared node security group for inter-node communication.
 
   ClusterName:
@@ -49,8 +63,19 @@ Parameters:
     Description: The cluster name provided when the cluster was created. If it is incorrect, nodes will not be able to join the cluster.
 
   KeyName:
-    Type: "AWS::EC2::KeyPair::KeyName"
+    Type: AWS::EC2::KeyPair::KeyName
     Description: The EC2 Key Pair to allow SSH access to the instances
+
+  MaxPrice:
+    Type: String
+    Default: ""
+    Description: MaxPrice for Spot instance, if empty on-demand price is used
+  
+  AssociatePublicIpAddress:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Associate a Public IP Address for Internet Gateway subnets.
 
   NodeAutoScalingGroupDesiredCapacity:
     Type: Number
@@ -249,35 +274,47 @@ Parameters:
     ConstraintDescription: Must be a valid EC2 instance type
     Description: EC2 instance type for the node instances
 
+  OnDemandBaseCapacity:
+    Type: Number
+    Default: 1
+    Description: Number of instances that should be OnDemand
+
+  OnDemandPercentageAboveBaseCapacity:
+    Type: Number
+    Default: 0
+    Description: Number of instances above the base capacity to scale together with SPOT 
+
   NodeVolumeSize:
     Type: Number
     Default: 50
     Description: Node volume size (should be at least 50 gb)
 
   Subnets:
-    Type: "List<AWS::EC2::Subnet::Id>"
-    Description: The subnets to launch the worker nodes into.
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The subnets where workers can be created.
 
   VpcId:
-    Type: "AWS::EC2::VPC::Id"
-    Description: The VPC of the Linux worker nodes
-
-Mappings:
-  PartitionMap:
-    aws:
-      EC2ServicePrincipal: "ec2.amazonaws.com"
-    aws-cn:
-      EC2ServicePrincipal: "ec2.amazonaws.com.cn"
+    Type: AWS::EC2::VPC::Id
+    Description: The VPC of the worker instances, same as Linux nodes
 
 Conditions:
   HasNodeImageId: !Not
-    - "Fn::Equals":
+    - Fn::Equals:
         - Ref: NodeImageId
         - ""
+  HasAssociatePublicIpAddress: !Not
+    - Fn::Equals:
+      - Ref: AssociatePublicIpAddress
+      - "false"
+
+  SetMaxPrice: !Not
+    - Fn::Equals:
+      - Ref: MaxPrice
+      - ""
 
 Resources:
   NodeInstanceRole:
-    Type: "AWS::IAM::Role"
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -285,82 +322,114 @@ Resources:
           - Effect: Allow
             Principal:
               Service:
-                - !FindInMap [PartitionMap, !Ref "AWS::Partition", EC2ServicePrincipal]
+                - !FindInMap [ServicePrincipals, !Ref "AWS::Partition", ec2]
             Action:
-              - "sts:AssumeRole"
+              - sts:AssumeRole
       ManagedPolicyArns:
-        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
-        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
       Path: /
 
   NodeInstanceProfile:
-    Type: "AWS::IAM::InstanceProfile"
+    Type: AWS::IAM::InstanceProfile
     Properties:
       Path: /
       Roles:
         - Ref: NodeInstanceRole
 
-  NodeLaunchConfig:
-    Type: "AWS::AutoScaling::LaunchConfiguration"
+NodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
-      AssociatePublicIpAddress: "true"
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+                DeleteOnTermination: true
+                VolumeSize: !Ref NodeVolumeSize
+                VolumeType: gp2
+        IamInstanceProfile:
+          Name: !Ref NodeInstanceProfile
+        ImageId: !If
+          - HasNodeImageId
+          - Ref: NodeImageId
+          - Ref: NodeImageIdSSMParam
+        InstanceType: !Ref NodeInstanceType
+        KeyName: !Ref KeyName
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: !If
+              - HasAssociatePublicIpAddress
+              - true
+              - false
+            DeviceIndex: 0
             DeleteOnTermination: true
-            VolumeSize: !Ref NodeVolumeSize
-            VolumeType: gp2
-      IamInstanceProfile: !Ref NodeInstanceProfile
-      ImageId: !If
-        - HasNodeImageId
-        - Ref: NodeImageId
-        - Ref: NodeImageIdSSMParam
-      InstanceType: !Ref NodeInstanceType
-      KeyName: !Ref KeyName
-      SecurityGroups: !Ref NodeSecurityGroups
-      UserData: !Base64
-        "Fn::Sub": |
-            <powershell>
-            [string]$EKSBinDir = "$env:ProgramFiles\Amazon\EKS"
-            [string]$EKSBootstrapScriptName = 'Start-EKSBootstrap.ps1'
-            [string]$EKSBootstrapScriptFile = "$EKSBinDir\$EKSBootstrapScriptName"
-            [string]$cfn_signal = "$env:ProgramFiles\Amazon\cfn-bootstrap\cfn-signal.exe"
+            Groups:
+              - !Ref NodeSecurityGroups
+        UserData: !Base64 
+          Fn::Sub: |
+              <powershell>
+              [string]$EKSBinDir = "$env:ProgramFiles\Amazon\EKS"
+              [string]$EKSBootstrapScriptName = 'Start-EKSBootstrap.ps1'
+              [string]$EKSBootstrapScriptFile = "$EKSBinDir\$EKSBootstrapScriptName"
+              [string]$cfn_signal = "$env:ProgramFiles\Amazon\cfn-bootstrap\cfn-signal.exe"
 
-            # Adding OpenSSH
-            iwr -o winssh.ps1 https://raw.githubusercontent.com/bgsilvait/winssh/master/winssh.ps1
-            .\winssh.ps1 -RunMode full
+              # Adding OpenSSH
+              iwr -o winssh.ps1 https://raw.githubusercontent.com/bgsilvait/winssh/master/winssh.ps1
+              .\winssh.ps1 -RunMode full
 
-            & $EKSBootstrapScriptFile -EKSClusterName ${ClusterName} ${BootstrapArguments} 3>&1 4>&1 5>&1 6>&1
-            $LastError = if ($?) { 0 } else { $Error[0].Exception.HResult }
-            & $cfn_signal --exit-code=$LastError `
-              --stack="${AWS::StackName}" `
-              --resource="NodeGroup" `
-              --region=${AWS::Region}
-            </powershell>
+              & $EKSBootstrapScriptFile -EKSClusterName ${ClusterName} ${BootstrapArguments} 3>&1 4>&1 5>&1 6>&1
+              $LastError = if ($?) { 0 } else { $Error[0].Exception.HResult }
+              & $cfn_signal --exit-code=$LastError `
+                --stack="${AWS::StackName}" `
+                --resource="NodeGroup" `
+                --region=${AWS::Region}
+              </powershell>
 
   NodeGroup:
-    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       DesiredCapacity: !Ref NodeAutoScalingGroupDesiredCapacity
-      LaunchConfigurationName: !Ref NodeLaunchConfig
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandAllocationStrategy: "prioritized"
+          OnDemandBaseCapacity: !Ref OnDemandBaseCapacity
+          OnDemandPercentageAboveBaseCapacity: !Ref OnDemandPercentageAboveBaseCapacity
+          SpotAllocationStrategy: "capacity-optimized"
+          SpotMaxPrice: !If
+          - SetMaxPrice
+          - Ref: MaxPrice
+          - Ref: AWS::NoValue
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref NodeLaunchTemplate
+            Version: !GetAtt NodeLaunchTemplate.LatestVersionNumber
       MaxSize: !Ref NodeAutoScalingGroupMaxSize
       MinSize: !Ref NodeAutoScalingGroupMinSize
       Tags:
         - Key: Name
-          PropagateAtLaunch: "true"
+          PropagateAtLaunch: true
           Value: !Sub ${ClusterName}-${NodeGroupName}-Node
         - Key: !Sub kubernetes.io/cluster/${ClusterName}
-          PropagateAtLaunch: "true"
+          PropagateAtLaunch: true
           Value: owned
+        - Key: k8s.io/cluster-autoscaler/enabled
+          PropagateAtLaunch: true
+          Value: "true"
+        - Key: !Sub k8s.io/cluster-autoscaler/${ClusterName}
+          PropagateAtLaunch: true
+          value: owned           
       VPCZoneIdentifier: !Ref Subnets
     UpdatePolicy:
       AutoScalingRollingUpdate:
-        MaxBatchSize: "1"
-        MinInstancesInService: !Ref NodeAutoScalingGroupDesiredCapacity
+        MaxBatchSize: 1
+        MinInstancesInService: 0
         PauseTime: PT5M
 
 Outputs:
   NodeInstanceRole:
     Description: The node instance role
     Value: !GetAtt NodeInstanceRole.Arn
+
+  NodeSecurityGroup:
+    Description: The security group for the node group
+    Value: !Ref NodeSecurityGroup

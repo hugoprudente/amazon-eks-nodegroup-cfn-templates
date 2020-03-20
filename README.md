@@ -12,6 +12,7 @@ The samples in this repository each demonstrate how to improve the [AWS Official
 * ability to enable and disable `AssociatePublicIpAddress`
 * ability to launch EC2 with `on-demand` and `spot`
 * ability to control number of `on-demand` vs `spot`
+* added [Cluster Autoscaler](https://github.com/kubernetes/autoscaler/) tags `k8s.io/cluster-autoscaler/enabled` and `k8s.io/cluster-autoscaler/<ClusterName>`
 
 ### Amazon Linux 2 (EKS Optimized)
 *

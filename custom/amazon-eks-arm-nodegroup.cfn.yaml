@@ -324,6 +324,12 @@ Resources:
         - Key: !Sub kubernetes.io/cluster/${ClusterName}
           PropagateAtLaunch: true
           Value: owned
+        - Key: k8s.io/cluster-autoscaler/enabled
+          PropagateAtLaunch: true
+          Value: "true"
+        - Key: !Sub k8s.io/cluster-autoscaler/${ClusterName}
+          PropagateAtLaunch: true
+          value: owned 
       VPCZoneIdentifier: !Ref Subnets
     UpdatePolicy:
       AutoScalingRollingUpdate:
