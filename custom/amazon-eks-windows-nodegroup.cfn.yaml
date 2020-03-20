@@ -361,10 +361,9 @@ Resources:
               - HasAssociatePublicIpAddress
               - true
               - false
-            DeviceIndex: 0
+            DeviceIndex: "0"
             DeleteOnTermination: true
-            Groups:
-              - !Ref NodeSecurityGroups
+            Groups: !Ref NodeSecurityGroups
         UserData: !Base64 
           Fn::Sub: |
               <powershell>

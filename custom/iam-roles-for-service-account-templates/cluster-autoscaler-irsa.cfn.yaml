@@ -1,0 +1,33 @@
+
+Parameters:
+  OIDCArn:
+    Type: String
+    Description: "arn:aws:iam::<account-id>:oidc-provider/oidc.eks.<region>.amazonaws.com/id/3808007C6E626EB242C69F1D22695468"
+
+Resources:
+  ClusterAutoScalerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      
+
+  ClusterAutoScalerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+              Federated: !Ref: OIDCArn
+          Action: 'sts:AssumeRoleWithWebIdentity'
+          Condition:
+              StringEquals:
+                'oidc.eks.eu-west-1.amazonaws.com/id/3808277C6E626EB242C69F1D22695468:sub': 'system:serviceaccount:kube-system:cluster-autoscaler'
+
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Path: /

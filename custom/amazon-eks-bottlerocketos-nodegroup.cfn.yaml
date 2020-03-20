@@ -532,7 +532,7 @@ Resources:
               - HasAssociatePublicIpAddress
               - true
               - false
-            DeviceIndex: 0
+            DeviceIndex: "0"
             DeleteOnTermination: true
             Groups:
               - !Ref NodeSecurityGroup
