@@ -201,7 +201,7 @@ Resources:
       Description: Allow node to communicate with each other
       FromPort: 0
       GroupId: !Ref NodeSecurityGroup
-      IpProtocol: -1
+      IpProtocol: "-1"
       SourceSecurityGroupId: !Ref NodeSecurityGroup
       ToPort: 65535
 
@@ -329,7 +329,7 @@ Resources:
           Value: "true"
         - Key: !Sub k8s.io/cluster-autoscaler/${ClusterName}
           PropagateAtLaunch: true
-          value: owned 
+          Value: owned 
       VPCZoneIdentifier: !Ref Subnets
     UpdatePolicy:
       AutoScalingRollingUpdate:

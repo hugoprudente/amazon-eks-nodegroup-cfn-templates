@@ -581,7 +581,7 @@ Resources:
           Value: "true"
         - Key: !Sub k8s.io/cluster-autoscaler/${ClusterName}
           PropagateAtLaunch: true
-          value: owned           
+          Value: owned           
       VPCZoneIdentifier: !Ref Subnets
     UpdatePolicy:
       AutoScalingRollingUpdate:
